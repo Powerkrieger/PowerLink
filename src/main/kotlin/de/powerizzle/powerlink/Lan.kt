@@ -93,8 +93,12 @@ object Lan {
         return Link(socket.getInputStream(), socket.getOutputStream(), socket, medium, address.trim(), onClose = onClose)
     }
 
-    /** Host side: answers discovery questions for [app] on [discoveryPort] until cancelled. */
-    suspend fun advertise(discoveryPort: Int, advert: () -> Advert) {
+    /**
+     * Host side: answers discovery questions for [app] on [discoveryPort] until cancelled.
+     * [bind] ties each reply socket to the network the question came from (see [connect]); unbound,
+     * Android would send replies to an offline hotspot out over mobile data.
+     */
+    suspend fun advertise(discoveryPort: Int, bind: (DatagramSocket, InetAddress) -> Unit = { _, _ -> }, advert: () -> Advert) {
         val socket = DatagramSocket(null).apply {
             reuseAddress = true
             broadcast = true
@@ -108,7 +112,12 @@ object Lan {
                 val ad = advert()
                 if (String(packet.data, 0, packet.length) != ASK + ad.app) continue
                 val reply = (ANSWER + linkJson.encodeToString(Advert.serializer(), ad)).toByteArray()
-                runCatching { socket.send(DatagramPacket(reply, reply.size, packet.address, packet.port)) }
+                runCatching {
+                    DatagramSocket().use { out ->
+                        bind(out, packet.address)
+                        out.send(DatagramPacket(reply, reply.size, packet.address, packet.port))
+                    }
+                }
             }
         } finally {
             socket.close()

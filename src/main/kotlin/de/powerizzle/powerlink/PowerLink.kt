@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.location.LocationManager
 import android.net.ConnectivityManager
+import android.net.Network
 import android.net.wifi.WifiManager
 import android.os.Build
 import androidx.core.content.ContextCompat
@@ -26,6 +27,7 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.Socket
 import java.util.UUID
@@ -181,7 +183,7 @@ class PowerLink(context: Context, val config: LinkConfig) {
                 scope.launch {
                     val lock = multicastLock()
                     try {
-                        Lan.advertise(config.discoveryPort) { advert }
+                        Lan.advertise(config.discoveryPort, bind = ::bindToLocalNetwork) { advert }
                     } catch (_: Exception) {
                         // Finding by name is broken, but typing the address still works.
                     } finally {
@@ -296,21 +298,29 @@ class PowerLink(context: Context, val config: LinkConfig) {
     }
 
     /**
-     * Ties [socket] to the network whose local subnet contains [target]. Without this, Android sends the
-     * connection out over the default network, which is mobile data whenever the Wi-Fi or hotspot has no internet.
+     * The network whose local subnet contains [target]. Sockets must be tied to it: Android otherwise uses the
+     * default network, which is mobile data whenever the Wi-Fi or hotspot has no internet.
      */
-    private fun bindToLocalNetwork(socket: Socket, target: InetAddress) {
-        val cm = context.getSystemService(ConnectivityManager::class.java) ?: return
+    private fun localNetworkFor(target: InetAddress): Pair<Network, String>? {
+        val cm = context.getSystemService(ConnectivityManager::class.java) ?: return null
         @Suppress("DEPRECATION")
         for (network in cm.allNetworks) {
             val props = cm.getLinkProperties(network) ?: continue
-            if (props.routes.any { !it.isDefaultRoute && it.matches(target) }) {
-                runCatching { network.bindSocket(socket) }
-                    .onSuccess { log("LAN: connecting to $target via ${props.interfaceName}") }
-                    .onFailure { log("LAN: couldn't bind to ${props.interfaceName}: ${it.message}") }
-                return
-            }
+            if (props.routes.any { !it.isDefaultRoute && it.matches(target) }) return network to props.interfaceName.orEmpty()
         }
+        return null
+    }
+
+    private fun bindToLocalNetwork(socket: Socket, target: InetAddress) {
+        val (network, name) = localNetworkFor(target) ?: return
+        runCatching { network.bindSocket(socket) }
+            .onSuccess { log("LAN: connecting to $target via $name") }
+            .onFailure { log("LAN: couldn't bind to $name: ${it.message}") }
+    }
+
+    private fun bindToLocalNetwork(socket: DatagramSocket, target: InetAddress) {
+        val (network, _) = localNetworkFor(target) ?: return
+        runCatching { network.bindSocket(socket) }
     }
 
     /** Connects to a game from [scan]. Throws [LinkException] with a message for the player. */
