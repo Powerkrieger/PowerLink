@@ -59,10 +59,24 @@ object Lan {
         }
     }
 
-    suspend fun connect(address: String, port: Int, medium: Medium = Medium.WIFI, onClose: () -> Unit = {}): Link {
+    /**
+     * Connects to a host. [bind] gets the unconnected socket first; on Android it ties the socket to the network
+     * the host is on, since an offline hotspot or Wi-Fi isn't the default network while mobile data is on.
+     */
+    suspend fun connect(
+        address: String,
+        port: Int,
+        medium: Medium = Medium.WIFI,
+        bind: (Socket, InetAddress) -> Unit = { _, _ -> },
+        onClose: () -> Unit = {},
+    ): Link {
         val socket = Socket()
         try {
-            cancellableBlocking({ socket.close() }) { socket.connect(InetSocketAddress(address.trim(), port), CONNECT_TIMEOUT_MS) }
+            cancellableBlocking({ socket.close() }) {
+                val target = InetAddress.getByName(address.trim())
+                bind(socket, target)
+                socket.connect(InetSocketAddress(target, port), CONNECT_TIMEOUT_MS)
+            }
         } catch (e: Exception) {
             socket.close()
             throw when (e) {

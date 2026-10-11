@@ -5,6 +5,7 @@ import android.bluetooth.BluetoothDevice
 import android.content.Context
 import android.content.pm.PackageManager
 import android.location.LocationManager
+import android.net.ConnectivityManager
 import android.net.wifi.WifiManager
 import android.os.Build
 import androidx.core.content.ContextCompat
@@ -25,6 +26,8 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.net.InetAddress
+import java.net.Socket
 import java.util.UUID
 
 /**
@@ -292,13 +295,31 @@ class PowerLink(context: Context, val config: LinkConfig) {
         awaitClose { lock?.release() }
     }
 
+    /**
+     * Ties [socket] to the network whose local subnet contains [target]. Without this, Android sends the
+     * connection out over the default network, which is mobile data whenever the Wi-Fi or hotspot has no internet.
+     */
+    private fun bindToLocalNetwork(socket: Socket, target: InetAddress) {
+        val cm = context.getSystemService(ConnectivityManager::class.java) ?: return
+        @Suppress("DEPRECATION")
+        for (network in cm.allNetworks) {
+            val props = cm.getLinkProperties(network) ?: continue
+            if (props.routes.any { !it.isDefaultRoute && it.matches(target) }) {
+                runCatching { network.bindSocket(socket) }
+                    .onSuccess { log("LAN: connecting to $target via ${props.interfaceName}") }
+                    .onFailure { log("LAN: couldn't bind to ${props.interfaceName}: ${it.message}") }
+                return
+            }
+        }
+    }
+
     /** Connects to a game from [scan]. Throws [LinkException] with a message for the player. */
     suspend fun join(game: Game): Link = when (game.medium) {
-        Medium.WIFI -> Lan.connect(game.target as String, config.tcpPort)
+        Medium.WIFI -> Lan.connect(game.target as String, config.tcpPort, bind = ::bindToLocalNetwork)
         Medium.BLUETOOTH -> bluetooth.connect(game.target as BluetoothDevice)
         Medium.WIFI_DIRECT -> wifiDirect.connect(game.target as WifiDirect.Target, game.name, config.tcpPort)
     }
 
     /** Connects to a host by typing its address, for when discovery doesn't find it. */
-    suspend fun joinAddress(address: String): Link = Lan.connect(address, config.tcpPort)
+    suspend fun joinAddress(address: String): Link = Lan.connect(address, config.tcpPort, bind = ::bindToLocalNetwork)
 }
