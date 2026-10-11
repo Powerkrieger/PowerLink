@@ -62,6 +62,9 @@ l.close()
 
 - **Guest Wi-Fis isolate clients.** Phones on the same guest/public network often can't reach each other at all.
   `Lan.connect` says so in its error; Bluetooth, Wi-Fi Direct or a hotspot work around it.
+- **Offline hotspots aren't Android's default network.** With mobile data on, unbound sockets to a hotspot
+  (or any Wi-Fi without internet) go out over mobile data and time out. `Lan.connect` and the discovery replies
+  therefore bind their sockets to the network whose subnet contains the other phone.
 - **Broadcast discovery needs a `MulticastLock`**, or many phones silently drop the packets.
 - **Bluetooth can't scan and query services at the same time:** an SDP query kills a running scan. Discovery
   takes turns (scan ~12 s, then ask each phone found whether it offers our UUID). Only named phones/computers are listed.
